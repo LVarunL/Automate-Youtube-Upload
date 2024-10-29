@@ -47,6 +47,9 @@ https://developers.google.com/api-client-library/python/guide/aaa_client_secrets
 
 VALID_PRIVACY_STATUSES = ("public", "private", "unlisted")
 
+VIDEO_EXTENSIONS = {'.mp4', '.mov', '.avi', '.mkv'}
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif'}
+TEXT_EXTENSIONS = {'.txt', '.md'}
 
 def get_authenticated_service(args):
     flow = flow_from_clientsecrets(CLIENT_SECRETS_FILE,
@@ -65,31 +68,30 @@ def get_authenticated_service(args):
 
 def initialize_upload(youtube, options):
     tags = None
-    if options.keywords:
-        tags = options.keywords.split(",")
+    if options.get("keywords"):
+        tags = options.get("keywords").split(",")
 
     body = dict(
         snippet=dict(
-            title=options.title,
-            description=options.description,
+            title=options.get("title"),
+            description=options.get("description"),
             tags=tags,
-            categoryId=options.category,
+            categoryId=options.get("category"),
         ),
         status=dict(
-            privacyStatus=options.privacyStatus
+            privacyStatus=options.get("privacyStatus")
         )
     )
 
     insert_request = youtube.videos().insert(
         part=",".join(body.keys()),
         body=body,
-        media_body=MediaFileUpload(options.file, chunksize=-1, resumable=True)
+        media_body=MediaFileUpload(options.get("file"), chunksize=-1, resumable=True)
     )
 
     video_id = resumable_upload(insert_request)
-    if video_id and options.thumbnail:
-        upload_thumbnail(youtube, video_id, options.thumbnail)
-
+    if video_id and options.get("thumbnail"):
+        upload_thumbnail(youtube, video_id, options.get("thumbnail"))
 
 # This method implements an exponential backoff strategy to resume a failed upload.
 def resumable_upload(insert_request):
@@ -139,26 +141,108 @@ def upload_thumbnail(youtube, video_id, thumbnail_file):
     except HttpError as e:
         print("An HTTP error %d occurred:\n%s" % (e.resp.status, e.content))
 
+def find_files(folder_path):
+    video_file = None
+    image_file = None
+    text_file = None
+    errors = []
+
+    try:
+        # Check if folder exists
+        if not os.path.isdir(folder_path):
+            raise FileNotFoundError(f"Folder '{folder_path}' does not exist.")
+        
+        # Iterate over files in the directory
+        for file_name in os.listdir(folder_path):
+            file_path = os.path.join(folder_path, file_name)
+            
+            # Ensure it's a file
+            if not os.path.isfile(file_path):
+                continue
+
+            # Get the file extension
+            _, ext = os.path.splitext(file_name)
+            ext = ext.lower()
+
+            # Classify file based on its extension
+            if ext in VIDEO_EXTENSIONS:
+                if video_file is None:
+                    video_file = file_path
+                else:
+                    errors.append(f"Multiple video files found: '{video_file}', '{file_path}'")
+            elif ext in IMAGE_EXTENSIONS:
+                if image_file is None:
+                    image_file = file_path
+                else:
+                    errors.append(f"Multiple image files found: '{image_file}', '{file_path}'")
+            elif ext in TEXT_EXTENSIONS:
+                if text_file is None:
+                    text_file = file_path
+                else:
+                    errors.append(f"Multiple text files found: '{text_file}', '{file_path}'")
+            else:
+                errors.append(f"Unsupported file type '{file_name}' found in the folder.")
+
+        # Check if all required files are present and unique
+        if video_file is None:
+            errors.append("No video file found.")
+        if image_file is None:
+            errors.append("No image file found.")
+        if text_file is None:
+            errors.append("No text file found.")
+
+    except Exception as e:
+        errors.append(f"An unexpected error occurred: {e}")
+
+    # If there are errors, write them to 'errors.txt' in the same folder
+    if errors:
+        errors_file_path = os.path.join(folder_path, "errors.txt")
+        with open(errors_file_path, "w") as error_file:
+            error_file.write("Errors encountered:\n")
+            for error in errors:
+                error_file.write("- " + error + "\n")
+        print(f"Errors were written to '{errors_file_path}'")
+    else:
+        print("All files found successfully:")
+
+    # Return the results
+    return {
+        "videoFile": video_file,
+        "imageFile": image_file,
+        "textFile": text_file,
+        "errors": errors
+    }
+
+def get_title_from_path(file_path):
+    # Extract the filename with extension
+    filename_with_extension = os.path.basename(file_path)
+    # Split the filename and extension
+    filename, _ = os.path.splitext(filename_with_extension)
+    return filename
+
+def read_text_file(file_path):
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            content = file.read()
+        return content
+    except FileNotFoundError:
+        print(f"Error: The file '{file_path}' was not found.")
+    except IOError:
+        print(f"Error: Unable to read the file '{file_path}'.")
+    return None
 
 if __name__ == '__main__':
-    argparser.add_argument("--file", required=True, help="Video file to upload")
-    argparser.add_argument("--title", help="Video title", default="Test Title")
-    argparser.add_argument("--description", help="Video description",
-                           default="Test Description")
-    argparser.add_argument("--category", default="22",
-                           help="Numeric video category. " +
-                                "See https://developers.google.com/youtube/v3/docs/videoCategories/list")
-    argparser.add_argument("--keywords", help="Video keywords, comma separated",
-                           default="")
-    argparser.add_argument("--privacyStatus", choices=VALID_PRIVACY_STATUSES,
-                           default=VALID_PRIVACY_STATUSES[0], help="Video privacy status.")
-    argparser.add_argument("--thumbnail", help="Thumbnail image file to upload", default=None)
+    parameters = {}
+    filesFound = find_files("C:\\Users\\vyasv\\OneDrive\\AutomateYoutube\\TestVideos\\Video1")
+    parameters["file"] = filesFound.get("videoFile")
+    parameters["title"] = get_title_from_path(parameters.get("file"))
+    parameters["thumbnail"] = filesFound.get("imageFile")
+    textFilePath = filesFound.get("textFile")
+    parameters["description"] = read_text_file(textFilePath)    
+    parameters["category"] = "22"
+    parameters["privacyStatus"] = "public"
+
     args = argparser.parse_args()
-
-
-    if not os.path.exists(args.file):
-        exit("Please specify a valid file using the --file= parameter.")
-
     youtube = get_authenticated_service(args)
     print(youtube)
     try:
@@ -167,19 +251,3 @@ if __name__ == '__main__':
         print("An HTTP error %d occurred:\n%s" % (e.resp.status, e.content))
 
 
-# options = 
-# {
-#   file: string(path),
-#   title: string(path),
-#   description: string(path),
-#   keywords: string(comma separated keywords)
-#   category: string(category number) idk whats this
-#   privacyStatus: string(Private/Public/Unlisted)
-# }
-"""
-python3 main.py --file="Final_video.mp4" --title="Movie Names" \
-                                  --description="A lot can be done with OpenAi"\
-                              --keywords="Amazon Redshift" \
-                                  --category="22" \
-                                  --privacyStatus="private"
-"""
